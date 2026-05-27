@@ -1,0 +1,15 @@
+*.o
+*.json
+*.xml
+build/*
+sms-daemon
+sms-send
+doc/*
+build/*
+build.sav/*
+*.xml
+*.ko
+*.ko.cmd
+*.mod.cmd
+*.o.cmd
+.*
