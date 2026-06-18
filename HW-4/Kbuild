@@ -1,0 +1,6 @@
+obj-m += kernel_fifo.o
+
+kernel_fifo-y := \
+	src/main.o \
+	src/params.o \
+	src/fifo_ops.o
