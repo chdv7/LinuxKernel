@@ -1,0 +1,9 @@
+obj-m += kernel_sync.o
+
+kernel_sync-y := \
+	src/main.o \
+	src/params.o \
+	src/worker.o \
+	src/sync.o
+
+ccflags-y += -I$(src)/src
