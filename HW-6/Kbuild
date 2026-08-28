@@ -1,0 +1,9 @@
+obj-m += kernel_hashtable_search.o
+
+kernel_hashtable_search-y := \
+	src/main.o \
+	src/params.o \
+	src/build.o \
+	src/search.o
+
+ccflags-y += -I$(src)/src
