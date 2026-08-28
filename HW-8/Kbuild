@@ -1,0 +1,9 @@
+obj-m += kernel_pc.o
+
+kernel_pc-y := \
+	src/main.o \
+	src/params.o \
+	src/producer.o \
+	src/consumer.o
+
+ccflags-y += -I$(src)/src
