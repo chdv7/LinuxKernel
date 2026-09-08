@@ -1,0 +1,3 @@
+obj-m += kernel_timer.o
+
+kernel_timer-y := src/main.o
