@@ -1,0 +1,9 @@
+obj-m += kernel_msgpool.o
+
+kernel_msgpool-y := \
+	src/main.o \
+	src/params.o \
+	src/queue.o \
+	src/alloc.o
+
+ccflags-y += -I$(src)/src
