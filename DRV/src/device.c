@@ -4,6 +4,7 @@
 #include <linux/fs.h>
 #include <linux/module.h>
 #include <linux/printk.h>
+#include <linux/uaccess.h>
 
 #include "vmodem.h"
 
@@ -32,6 +33,25 @@ static ssize_t vmodem_read(struct file *file, char __user *buffer, size_t count,
 static ssize_t vmodem_write(struct file *file, const char __user *buffer,
 			    size_t count, loff_t *offset)
 {
+	struct vmodem_device *vmodem = file->private_data;
+	char debug_buffer[257];
+	size_t debug_len;
+
+	if (!count) {
+		pr_info("vmodem%u write: count=0\n", vmodem->index);
+		return 0;
+	}
+
+	debug_len = min_t(size_t, count, sizeof(debug_buffer) - 1);
+	if (copy_from_user(debug_buffer, buffer, debug_len))
+		return -EFAULT;
+
+	debug_buffer[debug_len] = '\0';
+
+	pr_info("vmodem%u write: count=%zu data=\"%*pE\"%s\n",
+		vmodem->index, count, (int)debug_len, debug_buffer,
+		count > debug_len ? " (truncated)" : "");
+
 	return count;
 }
 
@@ -94,10 +114,13 @@ err_devices:
 		device_destroy(vmodem_class, MKDEV(MAJOR(vmodem_devt), i));
 		vmodems[i].device = NULL;
 	}
+
 	class_destroy(vmodem_class);
 	vmodem_class = NULL;
+
 err_cdev:
 	cdev_del(&vmodem_cdev);
+
 err_unregister:
 	unregister_chrdev_region(vmodem_devt, vmodem_count);
 	return ret;
