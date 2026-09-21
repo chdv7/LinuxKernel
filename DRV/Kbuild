@@ -1,0 +1,8 @@
+obj-m += vmodem.o
+
+vmodem-y := \
+	src/main.o \
+	src/device.o \
+	src/proc.o
+
+ccflags-y += -I$(src)/src
