@@ -74,8 +74,10 @@ static size_t handle_dial(struct vmodem_device *vmodem, const char *command,
 	strscpy(state->dial_number, number, sizeof(state->dial_number));
 	state->call_state = VMODEM_CALL_ACTIVE;
 	state->call_incoming = false;
+	state->connected = true;
 
-	return append_response(response, size, pos, "OK\r\n");
+	/* После успешного дозвона модем переходит в online/data state. */
+	return append_response(response, size, pos, "CONNECT\r\n");
 }
 
 /*
@@ -138,6 +140,10 @@ size_t vmodem_process_command(struct vmodem_device *vmodem, const char *command,
 	} else if (!strcasecmp(command, "AT+CGSN")) {
 		pos = append_response(response, response_size, pos,
 				      "%s\r\nOK\r\n", state->imei);
+	} else if (!strcasecmp(command, "AT+CIMI")) {
+		/* International Mobile Subscriber Identity текущей SIM. */
+		pos = append_response(response, response_size, pos,
+				      "%s\r\nOK\r\n", state->imsi);
 	} else if (!strncasecmp(command, "ATD", 3)) {
 		pos = handle_dial(vmodem, command, response, response_size, pos);
 	} else if (!strcasecmp(command, "ATA")) {
@@ -147,12 +153,14 @@ size_t vmodem_process_command(struct vmodem_device *vmodem, const char *command,
 		} else {
 			state->call_state = VMODEM_CALL_ACTIVE;
 			state->call_incoming = true;
+			state->connected = true;
 			pos = append_response(response, response_size, pos,
 					      "OK\r\n");
 		}
 	} else if (!strcasecmp(command, "ATH")) {
 		state->call_state = VMODEM_CALL_IDLE;
 		state->call_incoming = false;
+		state->connected = false;
 		state->dial_number[0] = '\0';
 		pos = append_response(response, response_size, pos, "OK\r\n");
 	} else if (!strcasecmp(command, "AT+CLCC")) {

@@ -24,6 +24,7 @@
 #define VMODEM_OPERATOR_MAX 32U
 #define VMODEM_NUMBER_MAX 32U
 #define VMODEM_IMEI_MAX 16U
+#define VMODEM_IMSI_MAX 16U
 
 /* CSQ: 0..31 — известный уровень сигнала, 99 — неизвестный. */
 #define VMODEM_DEFAULT_SIGNAL 20U
@@ -42,9 +43,11 @@ struct vmodem_user_state {
 	__u32 signal_level;
 	__u32 sim_ready;
 	__u32 call_state;
+	__u32 connected;
 	char operator_name[VMODEM_OPERATOR_MAX];
 	char dial_number[VMODEM_NUMBER_MAX];
 	char imei[VMODEM_IMEI_MAX];
+	char imsi[VMODEM_IMSI_MAX];
 };
 
 #define VMODEM_IOCTL_GET_STATE \
@@ -69,9 +72,11 @@ struct vmodem_state {
 	bool sim_ready;
 	enum vmodem_call_state call_state;
 	bool call_incoming;
+	bool connected;
 	char operator_name[VMODEM_OPERATOR_MAX];
 	char dial_number[VMODEM_NUMBER_MAX];
 	char imei[VMODEM_IMEI_MAX];
+	char imsi[VMODEM_IMSI_MAX];
 };
 
 /* Один экземпляр /dev/vmodemN. */
@@ -132,6 +137,10 @@ size_t vmodem_process_command(struct vmodem_device *vmodem, const char *command,
 			      char *response, size_t response_size);
 
 long vmodem_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+
+/* Добавляет асинхронный текст в общий выходной поток /dev/vmodemN. */
+int vmodem_emit_output(struct vmodem_device *vmodem, const char *data,
+		       size_t length);
 
 int vmodem_proc_create(void);
 void vmodem_proc_destroy(void);

@@ -23,11 +23,13 @@ static void fill_user_state(struct vmodem_device *vmodem,
 	user_state->signal_level = state->signal_level;
 	user_state->sim_ready = state->sim_ready;
 	user_state->call_state = state->call_state;
+	user_state->connected = state->connected;
 	strscpy(user_state->operator_name, state->operator_name,
 		sizeof(user_state->operator_name));
 	strscpy(user_state->dial_number, state->dial_number,
 		sizeof(user_state->dial_number));
 	strscpy(user_state->imei, state->imei, sizeof(user_state->imei));
+	strscpy(user_state->imsi, state->imsi, sizeof(user_state->imsi));
 }
 
 long vmodem_ioctl(struct file *file, unsigned int cmd, unsigned long arg)

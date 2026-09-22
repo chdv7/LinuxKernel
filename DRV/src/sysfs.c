@@ -171,6 +171,65 @@ static ssize_t sim_ready_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(sim_ready);
 
+/*
+ * connected: состояние carrier/data connection. ATD устанавливает 1.
+ * Переход 1 -> 0 извне имитирует потерю несущей и немедленно выдаёт
+ * unsolicited result code NO CARRIER в общий поток /dev/vmodemN.
+ */
+static ssize_t connected_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	struct vmodem_device *vmodem = to_vmodem(dev);
+	bool value;
+
+	mutex_lock(&vmodem->state_lock);
+	value = vmodem->state.connected;
+	mutex_unlock(&vmodem->state_lock);
+
+	return sysfs_emit(buf, "%u\n", value ? 1U : 0U);
+}
+
+static ssize_t connected_store(struct device *dev,
+			       struct device_attribute *attr, const char *buf,
+			       size_t count)
+{
+	struct vmodem_device *vmodem = to_vmodem(dev);
+	bool value;
+	bool lost_carrier = false;
+	int ret;
+
+	ret = kstrtobool(buf, &value);
+	if (ret)
+		return ret;
+
+	mutex_lock(&vmodem->state_lock);
+	if (vmodem->state.connected && !value)
+		lost_carrier = true;
+
+	vmodem->state.connected = value;
+	if (value) {
+		vmodem->state.call_state = VMODEM_CALL_ACTIVE;
+	} else {
+		vmodem->state.call_state = VMODEM_CALL_IDLE;
+		vmodem->state.call_incoming = false;
+		vmodem->state.dial_number[0] = '\0';
+	}
+	mutex_unlock(&vmodem->state_lock);
+
+	/* Никогда не берём io_lock, пока удерживается state_lock. */
+	if (lost_carrier) {
+		static const char no_carrier[] = "\r\nNO CARRIER\r\n";
+
+		ret = vmodem_emit_output(vmodem, no_carrier,
+					 sizeof(no_carrier) - 1);
+		if (ret)
+			return ret;
+	}
+
+	return count;
+}
+static DEVICE_ATTR_RW(connected);
+
 /* operator: имя оператора для AT+COPS?. */
 static ssize_t operator_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
@@ -236,12 +295,14 @@ static ssize_t call_state_store(struct device *dev,
 	if (!strcmp(value, "idle")) {
 		vmodem->state.call_state = VMODEM_CALL_IDLE;
 		vmodem->state.call_incoming = false;
+		vmodem->state.connected = false;
 		vmodem->state.dial_number[0] = '\0';
 	} else if (!strcmp(value, "incoming")) {
 		vmodem->state.call_state = VMODEM_CALL_INCOMING;
 		vmodem->state.call_incoming = true;
 	} else if (!strcmp(value, "active")) {
 		vmodem->state.call_state = VMODEM_CALL_ACTIVE;
+		vmodem->state.connected = true;
 	} else {
 		mutex_unlock(&vmodem->state_lock);
 		return -EINVAL;
@@ -324,6 +385,47 @@ static ssize_t imei_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RW(imei);
 
+/* imsi: 15 цифр; доступен также через AT+CIMI. */
+static ssize_t imsi_show(struct device *dev, struct device_attribute *attr,
+			 char *buf)
+{
+	struct vmodem_device *vmodem = to_vmodem(dev);
+	char imsi[VMODEM_IMSI_MAX];
+
+	mutex_lock(&vmodem->state_lock);
+	strscpy(imsi, vmodem->state.imsi, sizeof(imsi));
+	mutex_unlock(&vmodem->state_lock);
+
+	return sysfs_emit(buf, "%s\n", imsi);
+}
+
+static ssize_t imsi_store(struct device *dev, struct device_attribute *attr,
+			  const char *buf, size_t count)
+{
+	struct vmodem_device *vmodem = to_vmodem(dev);
+	char value[VMODEM_IMSI_MAX];
+	size_t i;
+	int ret;
+
+	ret = copy_sysfs_string(value, sizeof(value), buf, count);
+	if (ret)
+		return ret;
+
+	/* IMSI в нашей модели должен содержать ровно 15 десятичных цифр. */
+	if (strlen(value) != VMODEM_IMSI_MAX - 1)
+		return -EINVAL;
+	for (i = 0; i < VMODEM_IMSI_MAX - 1; ++i) {
+		if (value[i] < '0' || value[i] > '9')
+			return -EINVAL;
+	}
+
+	mutex_lock(&vmodem->state_lock);
+	strscpy(vmodem->state.imsi, value, sizeof(vmodem->state.imsi));
+	mutex_unlock(&vmodem->state_lock);
+	return count;
+}
+static DEVICE_ATTR_RW(imsi);
+
 /* state: компактный read-only snapshot всех основных полей. */
 static ssize_t state_show(struct device *dev, struct device_attribute *attr,
 			  char *buf)
@@ -337,11 +439,12 @@ static ssize_t state_show(struct device *dev, struct device_attribute *attr,
 
 	return sysfs_emit(
 		buf,
-		"echo=%u registered=%u signal=%u operator=%s sim_ready=%u call_state=%s dial_number=%s imei=%s\n",
+		"echo=%u registered=%u signal=%u operator=%s sim_ready=%u connected=%u call_state=%s dial_number=%s imei=%s imsi=%s\n",
 		state.echo_enabled ? 1U : 0U, state.registered ? 1U : 0U,
 		state.signal_level, state.operator_name, state.sim_ready ? 1U : 0U,
+		state.connected ? 1U : 0U,
 		vmodem_call_state_name(state.call_state), state.dial_number,
-		state.imei);
+		state.imei, state.imsi);
 }
 static DEVICE_ATTR_RO(state);
 
@@ -351,10 +454,12 @@ static struct attribute *vmodem_attrs[] = {
 	&dev_attr_signal.attr,
 	&dev_attr_registered.attr,
 	&dev_attr_sim_ready.attr,
+	&dev_attr_connected.attr,
 	&dev_attr_operator.attr,
 	&dev_attr_call_state.attr,
 	&dev_attr_dial_number.attr,
 	&dev_attr_imei.attr,
+	&dev_attr_imsi.attr,
 	&dev_attr_state.attr,
 	NULL,
 };

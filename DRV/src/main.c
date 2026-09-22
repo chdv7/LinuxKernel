@@ -65,4 +65,4 @@ module_exit(vmodem_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Dmitry Chuprov");
-MODULE_DESCRIPTION("DRVvirtual modem with AT commands and state");
+MODULE_DESCRIPTION("DRV virtual modem with AT commands and state");

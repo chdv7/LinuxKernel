@@ -133,11 +133,41 @@ response=$(run_at 'AT+CREG?' | tr -d '\r')
 printf '%s\n' "$response"
 printf '%s\n' "$response" | grep -q '^+CREG: 0,0$'
 
+printf '\nIMSI test...\n'
+response=$(run_at 'AT+CIMI' | tr -d '\r')
+printf '%s\n' "$response"
+printf '%s\n' "$response" | grep -q '^250011234560000$'
+[ "$(cat "$SYS/imsi")" = "250011234560000" ]
+
+# Проверяем, что IMSI можно изменить через sysfs и AT+CIMI видит новое значение.
+echo 250010123456789 | sudo tee "$SYS/imsi" >/dev/null
+response=$(run_at 'at+cimi' | tr -d '\r')
+printf '%s\n' "$response"
+printf '%s\n' "$response" | grep -q '^250010123456789$'
+
 printf '\nReset test...\n'
 run_at ATZ >/dev/null
 [ "$(cat "$SYS/echo")" = "1" ]
 [ "$(cat "$SYS/signal")" = "20" ]
 [ "$(cat "$SYS/registered")" = "1" ]
+# ATZ сбрасывает настройки модема, но не идентификатор SIM.
+[ "$(cat "$SYS/imsi")" = "250010123456789" ]
+
+printf '\nATD / carrier-loss test...\n'
+response=$(run_at 'ATD*99***1#' | tr -d '\r')
+printf '%s\n' "$response"
+printf '%s\n' "$response" | grep -q '^CONNECT$'
+[ "$(cat "$SYS/connected")" = "1" ]
+
+# Внешняя потеря carrier должна породить unsolicited NO CARRIER.
+echo 0 | sudo tee "$SYS/connected" >/dev/null
+response=$(sudo sh -c '
+	exec 3<"$1"
+	timeout 0.2 cat <&3 || true
+' sh "$DEV" | tr -d '\r')
+printf '%s\n' "$response"
+printf '%s\n' "$response" | grep -q '^NO CARRIER$'
+[ "$(cat "$SYS/connected")" = "0" ]
 
 printf '\n/proc/%s:\n' "$MODULE"
 cat "/proc/$MODULE"

@@ -36,10 +36,12 @@ static int vmodem_proc_show(struct seq_file *m, void *v)
 		seq_printf(m, "  signal=%u\n", state.signal_level);
 		seq_printf(m, "  operator=%s\n", state.operator_name);
 		seq_printf(m, "  sim_ready=%u\n", state.sim_ready ? 1U : 0U);
+		seq_printf(m, "  connected=%u\n", state.connected ? 1U : 0U);
 		seq_printf(m, "  call_state=%s\n",
 			   vmodem_call_state_name(state.call_state));
 		seq_printf(m, "  dial_number=%s\n", state.dial_number);
 		seq_printf(m, "  imei=%s\n", state.imei);
+		seq_printf(m, "  imsi=%s\n", state.imsi);
 	}
 
 	return 0;

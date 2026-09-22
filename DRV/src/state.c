@@ -21,7 +21,8 @@ const char *vmodem_call_state_name(enum vmodem_call_state state)
 
 /*
  * Сброс изменяемой части состояния. state_lock уже должен быть захвачен.
- * IMEI намеренно не меняем: это идентификатор конкретного экземпляра модема.
+ * IMEI и IMSI намеренно не меняем: это идентификаторы устройства
+ * и установленной SIM соответственно.
  */
 void vmodem_state_reset_locked(struct vmodem_device *vmodem)
 {
@@ -33,6 +34,7 @@ void vmodem_state_reset_locked(struct vmodem_device *vmodem)
 	state->sim_ready = true;
 	state->call_state = VMODEM_CALL_IDLE;
 	state->call_incoming = false;
+	state->connected = false;
 	strscpy(state->operator_name, "VMODEM", sizeof(state->operator_name));
 	state->dial_number[0] = '\0';
 }
@@ -52,5 +54,12 @@ void vmodem_state_init(struct vmodem_device *vmodem)
 	/* Для каждого /dev/vmodemN формируем стабильный 15-значный IMEI. */
 	snprintf(vmodem->state.imei, sizeof(vmodem->state.imei),
 		 "35678901234%04u", vmodem->index);
+
+	/*
+	 * IMSI также состоит из 15 цифр. Префикс 25001 (MTS), а последние цифры делают SIM каждого модема уникальной.
+	 */
+	snprintf(vmodem->state.imsi, sizeof(vmodem->state.imsi),
+		 "250011234560%03u", vmodem->index);
+
 	vmodem_state_reset_locked(vmodem);
 }

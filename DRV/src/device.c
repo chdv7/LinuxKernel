@@ -53,6 +53,24 @@ static int append_output(struct vmodem_device *vmodem, const char *data,
 	return 0;
 }
 
+/*
+ * Добавляет асинхронное сообщение в тот же общий поток, который читает
+ * minicom. Используется, например, для unsolicited result code NO CARRIER.
+ * Вызывающий не должен держать state_lock: обычный write() берёт блокировки
+ * в порядке io_lock -> state_lock, поэтому обратный порядок недопустим.
+ */
+int vmodem_emit_output(struct vmodem_device *vmodem, const char *data,
+		       size_t length)
+{
+	int ret;
+
+	mutex_lock(&vmodem->io_lock);
+	ret = append_output(vmodem, data, length);
+	mutex_unlock(&vmodem->io_lock);
+
+	return ret;
+}
+
 /* Возвращает текущее состояние echo. */
 static bool vmodem_echo_enabled(struct vmodem_device *vmodem)
 {
