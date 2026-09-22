@@ -7,6 +7,7 @@
 
 #include "vmodem.h"
 
+/* Количество виртуальных модемов задаётся при insmod: modems=1..16. */
 unsigned int vmodem_count = VMODEM_DEFAULT_DEVICES;
 dev_t vmodem_devt;
 struct cdev vmodem_cdev;
@@ -25,18 +26,21 @@ static int __init vmodem_init(void)
 {
 	int ret;
 
+	/* Не создаём частично валидный набор устройств. */
 	if (!vmodem_count_valid(vmodem_count)) {
 		pr_err("invalid modems=%u, expected 1..%u\n", vmodem_count,
 		       VMODEM_MAX_DEVICES);
 		return -EINVAL;
 	}
 
+	/* Регистрируем cdev, /dev/vmodemN и sysfs-атрибуты каждого модема. */
 	ret = vmodem_devices_create();
 	if (ret) {
 		pr_err("failed to create devices: %d\n", ret);
 		return ret;
 	}
 
+	/* /proc/vmodem показывает сводное состояние всех экземпляров. */
 	ret = vmodem_proc_create();
 	if (ret) {
 		pr_err("failed to create /proc/%s: %d\n", VMODEM_NAME, ret);
@@ -61,4 +65,4 @@ module_exit(vmodem_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Dmitry Chuprov");
-MODULE_DESCRIPTION("DRV: virtual modem character devices");
+MODULE_DESCRIPTION("DRVvirtual modem with AT commands and state");

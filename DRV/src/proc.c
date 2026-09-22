@@ -2,11 +2,13 @@
 
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <linux/string.h>
 
 #include "vmodem.h"
 
 static struct proc_dir_entry *vmodem_proc_entry;
 
+/* /proc/vmodem — сводное read-only представление всех виртуальных модемов. */
 static int vmodem_proc_show(struct seq_file *m, void *v)
 {
 	unsigned int i;
@@ -15,8 +17,30 @@ static int vmodem_proc_show(struct seq_file *m, void *v)
 	seq_printf(m, "modems=%u\n", vmodem_count);
 	seq_printf(m, "major=%u\n", MAJOR(vmodem_devt));
 
-	for (i = 0; i < vmodem_count; ++i)
-		seq_printf(m, "device=/dev/vmodem%u minor=%u\n", i, i);
+	for (i = 0; i < vmodem_count; ++i) {
+		struct vmodem_state state;
+
+		/*
+		 * Копируем состояние под mutex и печатаем snapshot уже без lock,
+		 * чтобы не держать mutex во время seq_printf().
+		 */
+		mutex_lock(&vmodems[i].state_lock);
+		state = vmodems[i].state;
+		mutex_unlock(&vmodems[i].state_lock);
+
+		seq_printf(m, "\nvmodem%u:\n", i);
+		seq_printf(m, "  device=/dev/vmodem%u minor=%u\n", i, i);
+		seq_printf(m, "  echo=%u\n", state.echo_enabled ? 1U : 0U);
+		seq_printf(m, "  registered=%u\n",
+			   state.registered ? 1U : 0U);
+		seq_printf(m, "  signal=%u\n", state.signal_level);
+		seq_printf(m, "  operator=%s\n", state.operator_name);
+		seq_printf(m, "  sim_ready=%u\n", state.sim_ready ? 1U : 0U);
+		seq_printf(m, "  call_state=%s\n",
+			   vmodem_call_state_name(state.call_state));
+		seq_printf(m, "  dial_number=%s\n", state.dial_number);
+		seq_printf(m, "  imei=%s\n", state.imei);
+	}
 
 	return 0;
 }

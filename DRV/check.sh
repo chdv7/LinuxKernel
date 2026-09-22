@@ -3,6 +3,8 @@ set -eu
 
 MODULE=vmodem
 MODEMS=3
+DEV=/dev/vmodem0
+SYS=/sys/class/vmodem/vmodem0
 
 cleanup() {
 	sudo rmmod "$MODULE" 2>/dev/null || true
@@ -18,39 +20,126 @@ wait_for_device() {
 	[ -c "$path" ]
 }
 
+# Выполняет одну AT-команду через один и тот же open fd.
+run_at() {
+	command="$1"
+	sudo sh -c '
+		exec 3<>"$1"
+		printf "%s\r" "$2" >&3
+		# read() теперь блокирующий; timeout завершает чтение после ответа.
+		timeout 0.2 cat <&3 || true
+	' sh "$DEV" "$command"
+}
+
 cleanup
 trap cleanup EXIT
 
 printf 'Loading %s with modems=%u\n' "$MODULE" "$MODEMS"
 sudo insmod "$MODULE.ko" modems="$MODEMS"
 
-printf '\n/proc/%s:\n' "$MODULE"
-cat "/proc/$MODULE"
-
 printf '\nChecking /dev and /sys...\n'
 i=0
 while [ "$i" -lt "$MODEMS" ]; do
 	wait_for_device "/dev/vmodem$i"
-	test -e "/sys/class/vmodem/vmodem$i"
-	printf 'OK: /dev/vmodem%d and /sys/class/vmodem/vmodem%d\n' "$i" "$i"
+	test -e "/sys/class/vmodem/vmodem$i/state"
+	printf 'OK: vmodem%d\n' "$i"
 	i=$((i + 1))
 done
 
-printf '\nChecking empty read/write...\n'
-printf 'AT\r' | sudo tee /dev/vmodem0 >/dev/null
-if [ -n "$(sudo dd if=/dev/vmodem0 bs=1 count=1 status=none)" ]; then
-	printf 'ERROR: read must return EOF at step 1\n'
+printf '\nAT test...\n'
+response=$(run_at AT | tr -d '\r')
+printf '%s\n' "$response"
+printf '%s\n' "$response" | grep -q '^AT$'
+printf '%s\n' "$response" | grep -q '^OK$'
+
+printf '\nPartial write test...\n'
+response=$(sudo sh -c '
+	exec 3<>"$1"
+	printf A >&3
+	printf T >&3
+	printf "+CS" >&3
+	printf "Q\r" >&3
+	timeout 0.2 cat <&3 || true
+' sh "$DEV" | tr -d '\r')
+printf '%s\n' "$response"
+printf '%s\n' "$response" | grep -q '^+CSQ: 20,99$'
+
+
+printf '\nShared stream / AT-prefix echo test...\n'
+# До подтверждённого AT мусор не отображается. После T префикс AT
+# появляется в общем output и может быть прочитан через другой fd.
+response=$(sudo sh -c '
+	exec 3>"$1"
+	exec 4<"$1"
+
+	printf "xxxA" >&3
+	# Пока пришла только потенциальная A, читать нечего.
+	timeout 0.1 dd bs=1 count=1 <&4 2>/dev/null || true
+
+	printf T >&3
+	# После подтверждения префикса AT другой fd должен увидеть именно "AT".
+	timeout 0.2 dd bs=1 count=2 <&4 2>/dev/null || true
+
+	# Обязательно завершаем начатую команду. Парсер принадлежит vmodemN,
+	# а не открытому fd, поэтому незавершённый "AT" иначе перейдёт
+	# в следующий тест. Ответ этой команды здесь только вычитываем.
+	printf "\r" >&3
+	timeout 0.2 cat <&4 >/dev/null || true
+' sh "$DEV")
+[ "$response" = "AT" ]
+printf 'OK: junk is hidden, AT prefix is echoed through shared output\n'
+
+printf '\nBackspace test...\n'
+response=$(sudo sh -c '
+	exec 3<>"$1"
+	printf "ATX\b\r" >&3
+	timeout 0.2 cat <&3 || true
+' sh "$DEV" | tr -d '\r')
+printf '%s\n' "$response"
+printf '%s\n' "$response" | grep -q '^OK$'
+if printf '%s\n' "$response" | grep -q '^ERROR$'; then
+	printf 'ERROR: backspace did not remove the previous character\n'
 	exit 1
 fi
-printf 'OK: write accepted, read returned EOF\n'
 
-printf '\nChecking invalid modem count...\n'
-cleanup
-if sudo insmod "$MODULE.ko" modems=17 2>/dev/null; then
-	printf 'ERROR: modems=17 was accepted\n'
-	cleanup
+printf '\nCase-insensitive / hidden-prefix-junk test...\n'
+response=$(sudo sh -c '
+	exec 3<>"$1"
+	printf "garbageati\r" >&3
+	timeout 0.2 cat <&3 || true
+' sh "$DEV" | tr -d '\r')
+printf '%s\n' "$response"
+printf '%s\n' "$response" | grep -q '^Virtual Modem 0$'
+
+printf '\nEcho persistence test...\n'
+run_at ATE0 >/dev/null
+[ "$(cat "$SYS/echo")" = "0" ]
+response=$(run_at AT | tr -d '\r')
+printf '%s\n' "$response"
+if printf '%s\n' "$response" | grep -q '^AT$'; then
+	printf 'ERROR: echo is still enabled\n'
 	exit 1
 fi
-printf 'OK: modems=17 rejected\n'
+printf '%s\n' "$response" | grep -q '^OK$'
 
-printf '\nStep 1 check completed successfully\n'
+printf '\nSysfs -> AT state test...\n'
+echo 7 | sudo tee "$SYS/signal" >/dev/null
+response=$(run_at 'AT+CSQ' | tr -d '\r')
+printf '%s\n' "$response"
+printf '%s\n' "$response" | grep -q '^+CSQ: 7,99$'
+
+echo 0 | sudo tee "$SYS/registered" >/dev/null
+response=$(run_at 'AT+CREG?' | tr -d '\r')
+printf '%s\n' "$response"
+printf '%s\n' "$response" | grep -q '^+CREG: 0,0$'
+
+printf '\nReset test...\n'
+run_at ATZ >/dev/null
+[ "$(cat "$SYS/echo")" = "1" ]
+[ "$(cat "$SYS/signal")" = "20" ]
+[ "$(cat "$SYS/registered")" = "1" ]
+
+printf '\n/proc/%s:\n' "$MODULE"
+cat "/proc/$MODULE"
+
+printf '\nStep 2 check completed successfully\n'

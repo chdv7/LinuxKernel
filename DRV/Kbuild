@@ -3,6 +3,10 @@ obj-m += vmodem.o
 vmodem-y := \
 	src/main.o \
 	src/device.o \
-	src/proc.o
+	src/state.o \
+	src/at.o \
+	src/ioctl.o \
+	src/proc.o \
+	src/sysfs.o
 
 ccflags-y += -I$(src)/src
