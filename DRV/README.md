@@ -1,64 +1,209 @@
-# DRV: драйвер символьного устройства, имитирующий интерфейс модема
+# DRV — виртуальный модем
 
-Разработать модуль ядра Linux, реализующий виртуальный модем в виде символьного устройства. Драйвер должен имитировать COM-порт с подключённым к нему модемом и поддерживать базовый интерфейс AT-команд.
+## Задание
 
-Пользовательская программа должна работать с модемом через файл устройства:
+Разработать модуль ядра Linux, реализующий драйвер символьного устройства,
+имитирующего COM-порт с подключённым модемом.
 
-<pre class="overflow-visible! px-0!" data-start="433" data-end="488"><div class="relative w-full mt-4 mb-1"><div class=""><div class="contents"><div class="relative"><div class="h-full min-h-0 min-w-0"><div class="h-full min-h-0 min-w-0"><div class="border border-token-border-light border-radius-3xl corner-superellipse/1.1 rounded-3xl"><div class="h-full w-full border-radius-3xl bg-(--code-block-surface) corner-superellipse/1.1 overflow-clip rounded-3xl [--code-block-surface:var(--bg-elevated-secondary)] dark:[--code-block-surface:var(--composer-surface-primary)] lxnfua_clipPathFallback"><div class="pointer-events-none absolute end-1.5 top-1 z-2 md:end-2 md:top-1"></div><div class="relative"><div class="pe-11 pt-3"><div class="relative z-0 flex max-w-full"><div id="code-block-viewer" dir="ltr" class="q9tKkq_viewer cm-editor z-10 light:cm-light dark:cm-light flex h-full w-full flex-col items-stretch ͼd ͼr"><div class="cm-scroller"><pre class="cm-content q9tKkq_readonly m-0"><code><span>/dev/vmodem0
-/dev/vmodem1
-...
-/dev/vmodem15</span></code></pre></div></div></div></div></div></div></div></div></div><div class=""><div class=""></div></div></div></div></div></div></pre>
+Драйвер должен:
 
-Количество создаваемых виртуальных модемов задаётся параметром модуля. Драйвер должен поддерживать от 1 до 16 независимых виртуальных модемов.
+- реализовывать операции `read`, `write`, `ioctl`;
+- регистрировать виртуальные модемы в `/dev`, `/sys` и `/proc`;
+- поддерживать от 1 до 16 независимых экземпляров модема;
+- создавать устройства `/dev/vmodemN`;
+- принимать AT-команды через `write()` и возвращать ответы через `read()`;
+- корректно обрабатывать AT-команды, переданные целиком, частями или посимвольно;
+- хранить внутреннее состояние каждого модема независимо от открытого файлового дескриптора;
+- сохранять состояние после `close()` и повторного `open()`;
+- предоставлять состояние модема через sysfs;
+- предоставлять состояние и операции управления через `ioctl`;
+- поддерживать базовые AT-команды и работу через терминальную программу, например `minicom`.
+
+На текущем этапе реализуется базовый AT-интерфейс и состояние виртуального модема.
+SMS в этот этап не входят.
+
+---
+
+## Описание реализации
+
+На втором этапе драйвер умеет хранить состояние каждого виртуального модема,
+собирать AT-команды из произвольного количества `write()` и возвращать ответы
+через `read()`.
+
+SMS на этом этапе намеренно отсутствуют — они будут добавлены только на шаге 3.
+
+### Структура
+
+```text
+DRV-step2/
+├── Kbuild
+├── Makefile
+├── README.md
+├── check.sh
+└── src/
+    ├── vmodem.h
+    ├── main.c
+    ├── device.c
+    ├── state.c
+    ├── at.c
+    ├── ioctl.c
+    ├── proc.c
+    └── sysfs.c
+```
+
+### Реализовано
+
+- `modems=1..16`;
+- `/dev/vmodemN`;
+- `/sys/class/vmodem/vmodemN/`;
+- `/proc/vmodem`;
+- постоянное состояние каждого модема;
+- буферизация AT-команды до `\r`;
+- команда может прийти одним `write()`, частями или посимвольно;
+- `read()` возвращает накопленный ответ;
+- debug-вывод каждого `write()` в `dmesg`;
+- `VMODEM_IOCTL_GET_STATE` и `VMODEM_IOCTL_RESET`.
+
+### Поддерживаемые AT-команды
+
+
+| Команда            | Описание                                                                                                                                                 |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AT`                            | Проверка связи с модемом. При успешной обработке возвращает`OK`.                                              |
+| `ATE0`                          | Отключает echo вводимых символов.                                                                                                       |
+| `ATE1`                          | Включает echo вводимых символов.                                                                                                         |
+| `ATI`                           | Возвращает идентификационную информацию виртуального модема.                                              |
+| `ATZ`                           | Сбрасывает изменяемое состояние модема к начальному состоянию.                                            |
+| `AT&F`                          | Восстанавливает заводские значения параметров модема.                                                            |
+| `AT+CSQ`                        | Возвращает текущий уровень сигнала в формате`+CSQ: <rssi>,99`.                                                            |
+| `AT+CREG?`                      | Возвращает состояние регистрации модема в мобильной сети.                                                      |
+| `AT+COPS?`                      | Возвращает информацию о текущем операторе сети.                                                                         |
+| `AT+CPIN?`                      | Возвращает состояние виртуальной SIM-карты, например`READY`.                                                          |
+| `AT+CGSN`                       | Возвращает IMEI виртуального модема.                                                                                                 |
+| `AT+CIMI`                       | Возвращает 15-значный IMSI виртуальной SIM-карты.                                                                               |
+| `ATD<number>[;]`                | Имитирует исходящий вызов на указанный номер. При успешном соединении возвращает`CONNECT`. |
+| `ATA`                           | Имитирует ответ на входящий вызов.                                                                                                  |
+| `ATH`                           | Завершает текущий вызов или соединение.                                                                                        |
+| `AT+CLCC`                       | Возвращает информацию о текущем вызове и его состоянии.                                                           |
+
+Неизвестная или неподдерживаемая команда возвращает `ERROR`.
+
+### Состояние модема
+
+Основное состояние хранится в `struct vmodem_device`, а не в контексте
+открытого файла. Поэтому `close()` не сбрасывает echo, сигнал, регистрацию,
+состояние звонка и другие параметры.
+
+Буфер незавершённой AT-команды и общий выходной поток также принадлежат
+самому `vmodemN`, а не конкретному `open()`.
+
+### Sysfs
+
+Для каждого модема доступны:
+
+```text
+/sys/class/vmodem/vmodemN/echo
+/sys/class/vmodem/vmodemN/signal
+/sys/class/vmodem/vmodemN/registered
+/sys/class/vmodem/vmodemN/sim_ready
+/sys/class/vmodem/vmodemN/connected
+/sys/class/vmodem/vmodemN/operator
+/sys/class/vmodem/vmodemN/call_state
+/sys/class/vmodem/vmodemN/dial_number
+/sys/class/vmodem/vmodemN/imei
+/sys/class/vmodem/vmodemN/imsi
+/sys/class/vmodem/vmodemN/state
+```
 
 Например:
 
-<pre class="overflow-visible! px-0!" data-start="645" data-end="687"><div class="relative w-full mt-4 mb-1"><div class=""><div class="contents"><div class="border border-token-border-light border-radius-3xl corner-superellipse/1.1 rounded-3xl"><div class="relative h-full w-full border-radius-3xl bg-(--code-block-surface) corner-superellipse/1.1 overflow-clip rounded-3xl [--code-block-surface:var(--bg-elevated-secondary)] dark:[--code-block-surface:var(--composer-surface-primary)] lxnfua_clipPathFallback"><div class="pointer-events-none absolute inset-x-4 top-12 bottom-4"><div class="pointer-events-none sticky z-40 shrink-0 z-1!"><div class="sticky bg-token-border-light"></div></div></div><div class="relative"><div class="h-full min-h-0 min-w-0"><div class="h-full min-h-0 min-w-0"><div class=""><div class="relative"><div class=""><div class="relative z-0 flex max-w-full"><div id="code-block-viewer" dir="ltr" class="q9tKkq_viewer cm-editor z-10 light:cm-light dark:cm-light flex h-full w-full flex-col items-stretch ͼd ͼr"><div class="cm-scroller"><pre class="cm-content q9tKkq_readonly m-0"><code><span class="ͼl">sudo</span><span> insmod vmodem.ko </span><span class="ͼm">modems</span><span class="ͼg">=</span><span class="ͼj">4</span></code></pre></div></div></div></div></div></div></div></div><div class=""><div class=""></div></div></div></div></div></div></div></div></pre>
+```bash
+echo 7 | sudo tee /sys/class/vmodem/vmodem0/signal
+cat /sys/class/vmodem/vmodem0/state
+```
 
-должен создать:
+После этого `AT+CSQ` вернёт `+CSQ: 7,99`.
 
-<pre class="overflow-visible! px-0!" data-start="706" data-end="769"><div class="relative w-full mt-4 mb-1"><div class=""><div class="contents"><div class="relative"><div class="h-full min-h-0 min-w-0"><div class="h-full min-h-0 min-w-0"><div class="border border-token-border-light border-radius-3xl corner-superellipse/1.1 rounded-3xl"><div class="h-full w-full border-radius-3xl bg-(--code-block-surface) corner-superellipse/1.1 overflow-clip rounded-3xl [--code-block-surface:var(--bg-elevated-secondary)] dark:[--code-block-surface:var(--composer-surface-primary)] lxnfua_clipPathFallback"><div class="pointer-events-none absolute end-1.5 top-1 z-2 md:end-2 md:top-1"></div><div class="relative"><div class="pe-11 pt-3"><div class="relative z-0 flex max-w-full"><div id="code-block-viewer" dir="ltr" class="q9tKkq_viewer cm-editor z-10 light:cm-light dark:cm-light flex h-full w-full flex-col items-stretch ͼd ͼr"><div class="cm-scroller"><pre class="cm-content q9tKkq_readonly m-0"><code><span>/dev/vmodem0
-/dev/vmodem1
-/dev/vmodem2
-/dev/vmodem3</span></code></pre></div></div></div></div></div></div></div></div></div><div class=""><div class=""></div></div></div></div></div></div></pre>
+### Ручная проверка AT
 
-Каждый модем имеет собственное независимое внутреннее состояние.
+Для простейшей ручной проверки можно использовать один файловый дескриптор.
+Отдельные fd для чтения и записи также поддерживаются:
 
-### Интерфейс символьного устройства
+```bash
+sudo sh -c '
+    exec 3<>/dev/vmodem0
+    printf "AT+CSQ\r" >&3
+    cat <&3
+'
+```
 
-Для каждого `/dev/vmodemN` необходимо реализовать как минимум:
+При включённом echo ожидается:
 
-<pre class="overflow-visible! px-0!" data-start="939" data-end="991"><div class="relative w-full mt-4 mb-1"><div class=""><div class="contents"><div class="border border-token-border-light border-radius-3xl corner-superellipse/1.1 rounded-3xl"><div class="relative h-full w-full border-radius-3xl bg-(--code-block-surface) corner-superellipse/1.1 overflow-clip rounded-3xl [--code-block-surface:var(--bg-elevated-secondary)] dark:[--code-block-surface:var(--composer-surface-primary)] lxnfua_clipPathFallback"><div class="pointer-events-none absolute inset-x-4 top-12 bottom-4"><div class="pointer-events-none sticky z-40 shrink-0 z-1!"><div class="sticky bg-token-border-light"></div></div></div><div class="relative"><div class="h-full min-h-0 min-w-0"><div class="h-full min-h-0 min-w-0"><div class=""><div class="relative"><div class=""><div class="relative z-0 flex max-w-full"><div id="code-block-viewer" dir="ltr" class="q9tKkq_viewer cm-editor z-10 light:cm-light dark:cm-light flex h-full w-full flex-col items-stretch ͼd ͼr"><div class="cm-scroller"><pre class="cm-content q9tKkq_readonly m-0"><code><span>.</span><span class="ͼm">open</span><span>
-.</span><span class="ͼm">release</span><span>
-.</span><span class="ͼm">read</span><span>
-.</span><span class="ͼm">write</span><span>
-.</span><span class="ͼm">unlocked_ioctl</span></code></pre></div></div></div></div></div></div></div></div><div class=""><div class=""></div></div></div></div></div></div></div></div></pre>
+```text
+AT+CSQ
++CSQ: 20,99
+OK
+```
 
-Пользовательская программа открывает `/dev/vmodemN` и передаёт AT-команды через `write()`.
+Проверка команды, отправленной несколькими `write()`:
 
-Команда может поступить:
+```bash
+sudo sh -c '
+    exec 3<>/dev/vmodem0
+    printf A >&3
+    printf T >&3
+    printf "+CS" >&3
+    printf "Q\r" >&3
+    cat <&3
+'
+```
 
-<pre class="overflow-visible! px-0!" data-start="1111" data-end="1142"><div class="relative w-full mt-4 mb-1"><div class=""><div class="contents"><div class="relative"><div class="h-full min-h-0 min-w-0"><div class="h-full min-h-0 min-w-0"><div class="border border-token-border-light border-radius-3xl corner-superellipse/1.1 rounded-3xl"><div class="h-full w-full border-radius-3xl bg-(--code-block-surface) corner-superellipse/1.1 overflow-clip rounded-3xl [--code-block-surface:var(--bg-elevated-secondary)] dark:[--code-block-surface:var(--composer-surface-primary)] lxnfua_clipPathFallback"><div class="pointer-events-none absolute end-1.5 top-1 z-2 md:end-2 md:top-1"></div><div class="relative"><div class="pe-11 pt-3"><div class="relative z-0 flex max-w-full"><div id="code-block-viewer" dir="ltr" class="q9tKkq_viewer cm-editor z-10 light:cm-light dark:cm-light flex h-full w-full flex-col items-stretch ͼd ͼr"><div class="cm-scroller"><pre class="cm-content q9tKkq_readonly m-0"><code><span>целиком:
-"AT+CSQ\r"</span></code></pre></div></div></div></div></div></div></div></div></div><div class=""><div class=""></div></div></div></div></div></div></pre>
+### Сборка и тест
 
-или частями:
+```bash
+make clean
+make
+sudo ./check.sh
+```
 
-<pre class="overflow-visible! px-0!" data-start="1158" data-end="1186"><div class="relative w-full mt-4 mb-1"><div class=""><div class="contents"><div class="relative"><div class="h-full min-h-0 min-w-0"><div class="h-full min-h-0 min-w-0"><div class="border border-token-border-light border-radius-3xl corner-superellipse/1.1 rounded-3xl"><div class="h-full w-full border-radius-3xl bg-(--code-block-surface) corner-superellipse/1.1 overflow-clip rounded-3xl [--code-block-surface:var(--bg-elevated-secondary)] dark:[--code-block-surface:var(--composer-surface-primary)] lxnfua_clipPathFallback"><div class="pointer-events-none absolute end-1.5 top-1 z-2 md:end-2 md:top-1"></div><div class="relative"><div class="pe-11 pt-3"><div class="relative z-0 flex max-w-full"><div id="code-block-viewer" dir="ltr" class="q9tKkq_viewer cm-editor z-10 light:cm-light dark:cm-light flex h-full w-full flex-col items-stretch ͼd ͼr"><div class="cm-scroller"><pre class="cm-content q9tKkq_readonly m-0"><code><span>"AT+"
-"CS"
-"Q\r"</span></code></pre></div></div></div></div></div></div></div></div></div><div class=""><div class=""></div></div></div></div></div></div></pre>
+После проверки шага 2 останавливаемся. SMS добавляются только на шаге 3.
 
-или даже посимвольно.
+### Minicom compatibility
 
-Драйвер должен накапливать входные данные до получения конца AT-команды (`\r` и/или `\n`), после чего разобрать команду и сформировать ответ.
+AT input and response buffers belong to each vmodem device rather than to a single open file descriptor. This allows character-by-character input and separate reader/writer descriptors without losing the partially assembled command.
 
-Ответ пользователь получает через `read()`.
+### Parsing details
 
-Пример:
+- AT command terminator is `\r` (CR). `\n` is ignored.
+- The parser accepts an AT command even if `AT` is not at the beginning of the received line.
+- AT commands are case-insensitive (`AT`, `at`, `At`, `aT`).
 
-<pre class="overflow-visible! px-0!" data-start="1408" data-end="1451"><div class="relative w-full mt-4 mb-1"><div class=""><div class="contents"><div class="relative"><div class="h-full min-h-0 min-w-0"><div class="h-full min-h-0 min-w-0"><div class="border border-token-border-light border-radius-3xl corner-superellipse/1.1 rounded-3xl"><div class="h-full w-full border-radius-3xl bg-(--code-block-surface) corner-superellipse/1.1 overflow-clip rounded-3xl [--code-block-surface:var(--bg-elevated-secondary)] dark:[--code-block-surface:var(--composer-surface-primary)] lxnfua_clipPathFallback"><div class="pointer-events-none absolute end-1.5 top-1 z-2 md:end-2 md:top-1"></div><div class="relative"><div class="pe-11 pt-3"><div class="relative z-0 flex max-w-full"><div id="code-block-viewer" dir="ltr" class="q9tKkq_viewer cm-editor z-10 light:cm-light dark:cm-light flex h-full w-full flex-col items-stretch ͼd ͼr"><div class="cm-scroller"><pre class="cm-content q9tKkq_readonly m-0"><code><span>write → "AT\r"
-read  ← "OK\r\n"</span></code></pre></div></div></div></div></div></div></div></div></div><div class=""><div class=""></div></div></div></div></div></div></pre>
+### Поток COM-порта
 
-Для неизвестной или некорректной команды:
+- Echo выдаётся немедленно, по одному принятому символу, а не после завершения AT-команды.
+- `\r` завершает команду. `\n` игнорируется.
+- Backspace (`0x08`) и DEL (`0x7f`) удаляют последний ещё не обработанный символ команды.
+- AT-команды регистронезависимы и могут начинаться не с первого символа принятой строки.
+- Входной буфер и выходной поток принадлежат `vmodemN`, а не конкретному file descriptor. Поэтому один fd может писать, а другой читать.
 
-<pre class="overflow-visible! px-0!" data-start="1496" data-end="1550"><div class="relative w-full mt-4 mb-1"><div class=""><div class="contents"><div class="relative"><div class="h-full min-h-0 min-w-0"><div class="h-full min-h-0 min-w-0"><div class="border border-token-border-light border-radius-3xl corner-superellipse/1.1 rounded-3xl"><div class="h-full w-full border-radius-3xl bg-(--code-block-surface) corner-superellipse/1.1 overflow-clip rounded-3xl [--code-block-surface:var(--bg-elevated-secondary)] dark:[--code-block-surface:var(--composer-surface-primary)] lxnfua_clipPathFallback"><div class="pointer-events-none absolute end-1.5 top-1 z-2 md:end-2 md:top-1"></div><div class="relative"><div class="pe-11 pt-3"><div class="relative z-0 flex max-w-full"><div id="code-block-viewer" dir="ltr" class="q9tKkq_viewer cm-editor z-10 light:cm-light dark:cm-light flex h-full w-full flex-col items-stretch ͼd ͼr"><div class="cm-scroller"><pre class="cm-content q9tKkq_readonly m-0"><code><span>write → "AT+UNKNOWN\r"
-read  ← "ERROR\r\n"</span></code></pre></div></div></div></div></div></div></div></div></div></div></div></div></div></pre>
+### Echo до AT-префикса
+
+До распознавания пары `AT` (без учёта регистра) входной мусор не попадает в
+выходной поток. Например, при включённом echo ввод `xxxATI\r` отображается как
+`ATI`, а `xxx` остаётся невидимым. Буква `A` временно задерживается до следующего
+символа; если им оказывается `T/t`, обе буквы `AT` выводятся в echo и начинается
+обычная посимвольная обработка команды.
+
+### CONNECT / NO CARRIER
+
+`ATD...` после успешного соединения возвращает `CONNECT` и устанавливает
+`/sys/class/vmodem/vmodemN/connected` в `1`. Внешний переход `connected`
+из `1` в `0` имитирует потерю carrier и помещает `NO CARRIER` в общий
+выходной поток `/dev/vmodemN`; сообщение не привязано к конкретному fd.
+
+### IMSI
+
+`AT+CIMI` возвращает 15-значный IMSI текущей виртуальной SIM. Значение также
+доступно для чтения и изменения через `/sys/class/vmodem/vmodemN/imsi` и
+отображается в `/proc/vmodem` и `VMODEM_IOCTL_GET_STATE`. Команды `ATZ` и
+`AT&F` IMSI не меняют.
