@@ -20,13 +20,11 @@ wait_for_device() {
 	[ -c "$path" ]
 }
 
-# Выполняет одну AT-команду через один и тот же open fd.
 run_at() {
 	command="$1"
 	sudo sh -c '
 		exec 3<>"$1"
 		printf "%s\r" "$2" >&3
-		# read() теперь блокирующий; timeout завершает чтение после ответа.
 		timeout 0.2 cat <&3 || true
 	' sh "$DEV" "$command"
 }
@@ -64,26 +62,19 @@ response=$(sudo sh -c '
 printf '%s\n' "$response"
 printf '%s\n' "$response" | grep -q '^+CSQ: 20,99$'
 
-
-printf '\nShared stream / AT-prefix echo test...\n'
-# При включённом echo каждая A/a отображается немедленно.
-# Остальной мусор до найденного AT не отображается.
+printf '\nImmediate AT-prefix echo test...\n'
 response=$(sudo sh -c '
 	exec 3>"$1"
 	exec 4<"$1"
 
 	printf "aaaqqaat" >&3
-	# Пять A/a отображаются сразу, q скрываются, T/t подтверждает префикс.
 	timeout 0.2 dd bs=1 count=6 <&4 2>/dev/null || true
 
-	# Обязательно завершаем начатую команду. Парсер принадлежит vmodemN,
-	# а не открытому fd, поэтому незавершённый "AT" иначе перейдёт
-	# в следующий тест. Ответ этой команды здесь только вычитываем.
 	printf "\r" >&3
 	timeout 0.2 cat <&4 >/dev/null || true
 ' sh "$DEV")
 [ "$response" = "aaaaat" ]
-printf 'OK: A/a is echoed immediately, junk is hidden, AT prefix is detected\n'
+printf 'OK: A/a is echoed immediately, junk is hidden, T/t completes AT prefix\n'
 
 printf '\nBackspace test...\n'
 response=$(sudo sh -c '
@@ -113,10 +104,11 @@ run_at ATE0 >/dev/null
 response=$(run_at AT | tr -d '\r')
 printf '%s\n' "$response"
 if printf '%s\n' "$response" | grep -q '^AT$'; then
-	printf 'ERROR: echo is still enabled\n'
+	printf 'ERROR: AT prefix was echoed while echo is disabled\n'
 	exit 1
 fi
 printf '%s\n' "$response" | grep -q '^OK$'
+printf 'OK: with echo disabled, input is hidden completely, including AT\n'
 
 printf '\nSysfs -> AT state test...\n'
 echo 7 | sudo tee "$SYS/signal" >/dev/null
@@ -135,7 +127,6 @@ printf '%s\n' "$response"
 printf '%s\n' "$response" | grep -q '^250011234560000$'
 [ "$(cat "$SYS/imsi")" = "250011234560000" ]
 
-# Проверяем, что IMSI можно изменить через sysfs и AT+CIMI видит новое значение.
 echo 250010123456789 | sudo tee "$SYS/imsi" >/dev/null
 response=$(run_at 'at+cimi' | tr -d '\r')
 printf '%s\n' "$response"
@@ -146,7 +137,6 @@ run_at ATZ >/dev/null
 [ "$(cat "$SYS/echo")" = "1" ]
 [ "$(cat "$SYS/signal")" = "20" ]
 [ "$(cat "$SYS/registered")" = "1" ]
-# ATZ сбрасывает настройки модема, но не идентификатор SIM.
 [ "$(cat "$SYS/imsi")" = "250010123456789" ]
 
 printf '\nATD / carrier-loss test...\n'
@@ -155,7 +145,6 @@ printf '%s\n' "$response"
 printf '%s\n' "$response" | grep -q '^CONNECT$'
 [ "$(cat "$SYS/connected")" = "1" ]
 
-# Внешняя потеря carrier должна породить unsolicited NO CARRIER.
 echo 0 | sudo tee "$SYS/connected" >/dev/null
 response=$(sudo sh -c '
 	exec 3<"$1"

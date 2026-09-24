@@ -136,9 +136,10 @@ static int append_at_response(struct vmodem_device *vmodem,
  * Это имитирует поведение модема: последовательность вроде "xxxAT" не
  * отображает "xxx" при включённом echo.
  *
- * Первую A/a нельзя немедленно вывести: пока не пришёл следующий символ,
- * неизвестно, действительно ли это начало AT. Поэтому A временно хранится
- * в at_prefix_a и выводится вместе с T/t после подтверждения префикса.
+ * При включённом echo каждая A/a отображается сразу, поскольку она может
+ * оказаться началом AT-префикса. Если следующим символом приходит T/t,
+ * он также отображается сразу и начинается обычная обработка команды.
+ * При выключенном echo ввод не отображается вообще, включая префикс AT.
  */
 static int consume_before_at_prefix(struct vmodem_device *vmodem, char byte)
 {
@@ -151,10 +152,16 @@ static int consume_before_at_prefix(struct vmodem_device *vmodem, char byte)
 		return 0;
 	}
 
-	/* Backspace/DEL до AT относится только к неотображаемому мусору. */
+	/*
+	 * Backspace/DEL до AT стирает ранее отображённую потенциальную A/a.
+	 * Остальной мусор до AT остаётся неотображаемым.
+	 */
 	if (byte == '\b' || byte == 0x7f) {
+		if (!vmodem->at_prefix_pending)
+			return 0;
+
 		vmodem->at_prefix_pending = false;
-		return 0;
+		return echo_input_byte(vmodem, byte);
 	}
 
 	if (vmodem->at_prefix_pending) {
@@ -168,18 +175,15 @@ static int consume_before_at_prefix(struct vmodem_device *vmodem, char byte)
 			vmodem->command_active = true;
 			vmodem->at_prefix_pending = false;
 
-			if (!vmodem_echo_enabled(vmodem))
-				return 0;
-
-			/* После подтверждения AT показываем обе буквы сразу. */
-			ret = append_output(vmodem, prefix, sizeof(prefix));
+			/* A/a уже была отображена; теперь отображаем T/t. */
+			ret = echo_input_byte(vmodem, byte);
 			return ret;
 		}
 
 		/* Новая A может быть началом следующего возможного префикса. */
 		if (byte == 'A' || byte == 'a') {
 			vmodem->at_prefix_a = byte;
-			return 0;
+			return echo_input_byte(vmodem, byte);
 		}
 
 		vmodem->at_prefix_pending = false;
@@ -189,6 +193,7 @@ static int consume_before_at_prefix(struct vmodem_device *vmodem, char byte)
 	if (byte == 'A' || byte == 'a') {
 		vmodem->at_prefix_a = byte;
 		vmodem->at_prefix_pending = true;
+		return echo_input_byte(vmodem, byte);
 	}
 
 	return 0;
@@ -198,7 +203,9 @@ static int consume_before_at_prefix(struct vmodem_device *vmodem, char byte)
  * Принимает один байт входного потока. Команда может прийти одним write(),
  * несколькими write() или полностью посимвольно.
  *
- * До подтверждённого AT-префикса мусор не отображается и не сохраняется.
+ * До подтверждённого AT-префикса посторонний мусор не сохраняется.
+ * При включённом echo потенциальные A/a отображаются сразу; после найденного
+ * AT echo идёт посимвольно. При выключенном echo ввод не отображается.
  * Окончанием команды является CR ('\r'); LF ('\n') игнорируется.
  */
 static int consume_input_byte(struct vmodem_device *vmodem, char byte)
